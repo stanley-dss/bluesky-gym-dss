@@ -44,3 +44,9 @@ def register_envs():
         entry_point="bluesky_gym.envs.merge_env:MergeEnv",
         max_episode_steps=50,
     )
+
+    register(
+        id="DescentEnvXYZ-v0",
+        entry_point="bluesky_gym.envs.3d_descent_env:DescentEnvXYZ",
+        max_episode_steps=100,
+    )
