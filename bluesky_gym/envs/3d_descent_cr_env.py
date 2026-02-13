@@ -57,7 +57,7 @@ WAYPOINT_DISTANCE_MAX = 300  # km - maximum distance to waypoint
 INTRUSION_DISTANCE = 5 # NM
 VERTICAL_MARGIN = 1000 * 0.3048 # ft
 
-INTRUSION_PENALTY = -50
+INTRUSION_PENALTY = -20
 NM2KM = 1.852
 
 
@@ -82,6 +82,7 @@ class DescentEnvCR3D(gym.Env):
         self.window_width = 512
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height)
+        self.rng = np.random.default_rng(seed=1)
 
         # Handle scenario path: can be a file, directory, or None
         self.scenario_files = []
@@ -528,7 +529,8 @@ class DescentEnvCR3D(gym.Env):
         self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF, TARGET_ALT_DIF)
 
         # Create aircraft in BlueSky (default position)
-        bs.traf.cre("KL001", actype="A320", acalt=alt_init, acspd=AC_SPD, aclat = self.ac_lat, aclon = self.ac_long) #KL001 is never used as a callsign in the scen files
+        # adjust 
+        bs.traf.cre("KL001", actype="A320", acalt=alt_init, acspd=AC_SPD, aclat = self.ac_lat + random.sample([-1, 1], 1)[0]*random.randint(25, 75) /100, aclon = self.ac_long + random.sample([-1, 1], 1)[0]*random.randint(25, 75) /100) #KL001 is never used as a callsign in the scen files
         bs.traf.swvnav[0] = False
 
         # Load intruders from scenario file (every aircraft created is an intruder)
