@@ -46,7 +46,7 @@ def register_envs():
     )
 
     register(
-        id="DescentEnvXYZ-v0",
-        entry_point="bluesky_gym.envs.3d_descent_env:DescentEnvXYZ",
+        id="DescentEnvCR3D-v0",
+        entry_point="bluesky_gym.envs.3d_descent_cr_env:DescentEnvCR3D",
         max_episode_steps=100,
     )

@@ -1,4 +1,3 @@
-from pathlib import Path
 import numpy as np
 import pygame
 
@@ -50,15 +49,6 @@ DISTANCE_MARGIN = 5         # km - landing zone radius
 WAYPOINT_DISTANCE_MIN = 75  # km - minimum distance to waypoint
 WAYPOINT_DISTANCE_MAX = 300  # km - maximum distance to waypoint
 
-# Conflict Resolution
-NUM_INTRUDERS = 5
-INTRUSION_DISTANCE = 5 # NM
-VERTICAL_MARGIN = 1000 * 0.3048 # ft
-
-INTRUSION_PENALTY = -50
-
-
-
 # =========================
 # Environment
 # =========================
@@ -76,7 +66,7 @@ class DescentEnvXYZ(gym.Env):
 
     metadata = {"render_modes": ["human"], "render_fps": 120}
 
-    def __init__(self, render_mode=None, scenario_path=None):
+    def __init__(self, render_mode=None):
         self.window_width = 512
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height)
@@ -89,15 +79,7 @@ class DescentEnvXYZ(gym.Env):
                 "waypoint_reached": spaces.Box(0, 1, shape=(NUM_WAYPOINTS,), dtype=np.float64),
                 "altitude": spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64),
                 "target_altitude": spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64),
-                "vz": spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64),
-                # Intruder Observations
-                "intruder_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "cos_difference_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "sin_difference_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "altitude_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "x_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "y_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "z_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64)
+                "vz": spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
             }
         )
         # holding horizontal velocity constant at 150
@@ -106,8 +88,6 @@ class DescentEnvXYZ(gym.Env):
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
-        self.scenario_path = scenario_path
-        self.intruder_ids = []
 
         # Initialize BlueSky
         if bs.sim is None:
@@ -119,7 +99,6 @@ class DescentEnvXYZ(gym.Env):
         # Logging variables
         self.total_reward = 0
         self.final_altitude = 0
-        self.total_intrusions = 0
 
         # Episode state
         self.reached = False
@@ -149,46 +128,6 @@ class DescentEnvXYZ(gym.Env):
         self.plane_img = None
 
     # =========================
-    # Scenario loading
-    # =========================
-
-    def _read_scn_commands(self, scn_path: str):
-        """Read a BlueSky scenario file and return a list of commands (strip timestamps and comments)."""
-        cmds = []
-        for raw in Path(scn_path).read_text().splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if ">" not in line:
-                continue
-            _, cmd = line.split(">", 1)
-            cmd = cmd.strip()
-            if not cmd:
-                continue
-
-            if cmd.startswith("DEL "):
-                continue
-
-            cmds.append(cmd)
-        return cmds
-
-    def _load_scenario(self, scn_path: str):
-        """Execute all of the commands from a scenario file."""
-        for cmd in self._read_scn_commands(scn_path):
-            bs.stack.stack(cmd)
-
-    def _infer_intruder_ids(self, scn_path: str):
-        """Get the intruder aircraft IDs by reading CRE commands from the scenario."""
-        ids = []
-        for cmd in self._read_scn_commands(scn_path):
-            if cmd.startswith("CRE "):
-                parts = cmd.split()
-                if len(parts) >= 2:
-                    acid = parts[1].split(",")[0].strip()
-                    ids.append(acid)
-        return ids
-
-    # =========================
     # Observation
     # =========================
 
@@ -196,8 +135,6 @@ class DescentEnvXYZ(gym.Env):
         # Horizontal observations
         NM2KM = 1.852
         ac_idx = bs.traf.id2idx('KL001')
-
-        assert(ac_idx == 0)
 
         # Current heading of aircraft
         self.ac_hdg = bs.traf.hdg[ac_idx]
@@ -232,55 +169,6 @@ class DescentEnvXYZ(gym.Env):
         # Mask observations if waypoint is reached (multiply by (1 - reached))
         mask = (wpt_reach_arr - 1) * -1  # 1 if not reached, 0 if reached
 
-
-        # Conflict Resolution
-        self.intruder_distance = []
-        self.cos_bearing = []
-        self.sin_bearing = []
-        self.altitude_difference = []
-        self.x_difference_speed = []
-        self.y_difference_speed = []
-        self.z_difference_speed = []
-
-        intruder_ids = self.intruder_ids[:NUM_INTRUDERS]
-
-        for acid in intruder_ids:
-            int_idx = bs.traf.id2idx(acid)
-
-            int_qdr, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-
-            self.intruder_distance.append(int_dis * NM2KM)
-
-            alt_dif = bs.traf.alt[int_idx] - self.altitude
-            vz_dif = bs.traf.vs[int_idx] - self.vz
-
-            self.altitude_difference.append(alt_dif)
-            self.z_difference_speed.append(vz_dif)
-
-            bearing = self.ac_hdg - int_qdr
-            bearing = fn.bound_angle_positive_negative_180(bearing)
-
-            self.cos_bearing.append(np.cos(np.deg2rad(bearing)))
-            self.sin_bearing.append(np.sin(np.deg2rad(bearing)))
-
-            heading_difference = bs.traf.hdg[ac_idx] - bs.traf.hdg[int_idx]
-            x_dif = - np.cos(np.deg2rad(heading_difference)) * bs.traf.gs[int_idx]
-            y_dif = bs.traf.gs[ac_idx] - np.sin(np.deg2rad(heading_difference)) * bs.traf.gs[int_idx]
-
-            self.x_difference_speed.append(x_dif)
-            self.y_difference_speed.append(y_dif)
-
-        # Pad intruder arrays to fixed length NUM_INTRUDERS
-        while len(self.intruder_distance) < NUM_INTRUDERS:
-            self.intruder_distance.append(WAYPOINT_DISTANCE_MAX)   # "far away"
-            self.cos_bearing.append(1.0)
-            self.sin_bearing.append(0.0)
-            self.altitude_difference.append(0.0)
-            self.x_difference_speed.append(0.0)
-            self.y_difference_speed.append(0.0)
-            self.z_difference_speed.append(0.0)
-        
-
         obs = {
             "waypoint_distance": mask * np.array([self.wpt_dis]) / WAYPOINT_DISTANCE_MAX,
             "cos_difference": mask * np.array([self.wpt_cos]),
@@ -289,14 +177,6 @@ class DescentEnvXYZ(gym.Env):
             "altitude": obs_altitude,
             "target_altitude": obs_target_alt,
             "vz": np.array([(self.vz - VZ_MEAN) / VZ_STD]),
-            # Intruders
-            "intruder_distance": np.array(self.intruder_distance)/ WAYPOINT_DISTANCE_MAX,
-            "cos_difference_pos": np.array(self.cos_bearing),
-            "sin_difference_pos": np.array(self.sin_bearing),
-            "altitude_difference": np.array(self.altitude_difference)/ALT_STD,
-            "x_difference_speed": np.array(self.x_difference_speed)/AC_SPD,
-            "y_difference_speed": np.array(self.y_difference_speed)/AC_SPD,
-            "z_difference_speed": np.array(self.z_difference_speed)
         }
 
         return obs
@@ -307,31 +187,12 @@ class DescentEnvXYZ(gym.Env):
         # for now just have 10, because it crashed if I gave none for some reason.
         return {
             "total_reward": self.total_reward,
-            "total_intrusions": self.total_intrusions,
             "final_altitude": self.final_altitude
         }
 
     # =========================
     # Reward
     # =========================
-    def _check_intrusion(self):
-        ac_idx = bs.traf.id2idx('KL001')
-        reward = 0
-
-        intruder_ids = self.intruder_ids[:NUM_INTRUDERS]
-
-        for acid in intruder_ids:
-            int_idx = bs.traf.id2idx(acid)
-            _, int_dis = bs.tools.geo.kwikqdrdist(
-                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
-                bs.traf.lat[int_idx], bs.traf.lon[int_idx]
-            )
-
-            if int_dis < INTRUSION_DISTANCE:
-                self.total_intrusions += 1
-                reward += INTRUSION_PENALTY
-        
-        return reward
 
     def _get_reward(self):
         """
@@ -367,21 +228,18 @@ class DescentEnvXYZ(gym.Env):
         alt_error = alpha * abs(self.altitude - self.target_alt)
         altitude_penalty = ALT_DIF_REWARD_SCALE * alt_error
 
+
         # Encourage getting closer to the landing zone
         distance_penalty = -0.02 * d
+
 
         # Penalize aggressive vertical motion
         vz_penalty = -0.01 * abs(self.vz)
 
+        hdg_penalty = 0
         # Penalize too many turns, increases as it gets closer to landing 
-        if self.prev_hdg is not None:
-            d_hdg = fn.bound_angle_positive_negative_180(self.ac_hdg - self.prev_hdg)
-            hdg_penalty = -0.001 * abs(d_hdg) * alpha
-        else:
-            hdg_penalty = 0.0
-            
-
-        intruder_penalty = self._check_intrusion()
+        if self.prev_hdg:
+            hdg_penalty = (self.ac_hdg - self.prev_hdg) * -0.001 * alpha
 
         # Waypoint reached logic
         if d <= DISTANCE_MARGIN and not self.reached:
@@ -404,7 +262,7 @@ class DescentEnvXYZ(gym.Env):
             return reward, True
 
         # Total reward
-        reward = altitude_penalty + distance_penalty + vz_penalty + hdg_penalty + intruder_penalty
+        reward = altitude_penalty + distance_penalty + vz_penalty + hdg_penalty
         self.total_reward += reward
 
         return reward, False
@@ -436,24 +294,6 @@ class DescentEnvXYZ(gym.Env):
     # =========================
     # Reset
     # =========================
-    def _generate_intruders(self, acid = 'KL1001'):
-        target_idx = bs.traf.id2idx(acid)
-        altitude = bs.traf.alt[target_idx]
-        spd = bs.traf.gs[target_idx]
-        for i in range(NUM_INTRUDERS):
-            dpsi = np.random.randint(45,315)
-            cpa = np.random.randint(0,INTRUSION_DISTANCE)
-            tlosh = np.random.randint(100,int((WAYPOINT_DISTANCE_MAX*0.9)*1000/spd))
-            average_tod = (WAYPOINT_DISTANCE_MAX*1000/spd) - 2*self.target_alt/ACTION_2_MS
-            if tlosh > average_tod:
-                dH = np.random.randint(int(-altitude + 500),int((self.target_alt - altitude) + 100))
-            else:
-                dH = np.random.randint(int((self.target_alt - altitude) - 500),int((self.target_alt - altitude) + 500))
-            tlosv = 100000000000.
-
-            bs.traf.creconfs(acid=f'{i}',actype="A320",targetidx=target_idx,dpsi=dpsi,dcpa=cpa,tlosh=tlosh,dH=dH,tlosv=tlosv)
-            bs.traf.alt[i+1] = bs.traf.alt[target_idx] + dH
-            bs.traf.ap.selaltcmd(i+1, bs.traf.alt[target_idx] + dH, 0)
 
     def _generate_waypoint(self, acid = "KL001"):
         wpt_dis_init = np.random.randint(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
@@ -479,15 +319,8 @@ class DescentEnvXYZ(gym.Env):
         self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF, TARGET_ALT_DIF)
 
         # Create aircraft in BlueSky (default position)
-        bs.traf.cre("KL001", actype="A320", acalt=alt_init, acspd=AC_SPD) #KL001 is never used as a callsign in the scen files
+        bs.traf.cre("KL001", actype="A320", acalt=alt_init, acspd=AC_SPD)
         bs.traf.swvnav[0] = False
-
-        # Load intruders from scenario file (every aircraft created is an intruder)
-        if self.scenario_path is not None:
-            self._load_scenario(self.scenario_path)
-            self.intruder_ids = self._infer_intruder_ids(self.scenario_path)
-        else:
-            self.intruder_ids = []
 
         # Generate landing zone waypoint (after aircraft is created)
         self._generate_waypoint()
@@ -665,59 +498,6 @@ class DescentEnvXYZ(gym.Env):
         lat_long_text = f"Latitude: {bs.traf.lat[ac_idx]:.2f}{chr(176)}, Longitude: {bs.traf.lon[ac_idx]:.2f}{chr(176)}"
         lat_long_surface = self.font.render(lat_long_text, True, (0, 0, 0))
         canvas.blit(lat_long_surface, (10, 70))
-
-         # draw intruders
-        ac_length = 3
-
-        intruder_ids = self.intruder_ids[:NUM_INTRUDERS]
-
-        for acid in intruder_ids:
-            int_idx = bs.traf.id2idx(acid)
-            int_hdg = bs.traf.hdg[int_idx]
-
-            heading_end_x = ((np.cos(np.deg2rad(int_hdg)) * ac_length)/max_distance)*self.window_width
-            heading_end_y = ((np.sin(np.deg2rad(int_hdg)) * ac_length)/max_distance)*self.window_width
-
-            int_qdr, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-
-            # determine color
-            if int_dis < INTRUSION_DISTANCE:
-                color = (220,20,60)
-            else: 
-                color = (80,80,80)
-
-            x_pos = (self.window_width/2)+(np.cos(np.deg2rad(int_qdr))*(int_dis * NM2KM)/max_distance)*self.window_width
-            y_pos = (self.window_height/2)-(np.sin(np.deg2rad(int_qdr))*(int_dis * NM2KM)/max_distance)*self.window_height
-
-            pygame.draw.line(canvas,
-                color,
-                (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-                width = 4
-            )
-
-            # draw heading line
-            heading_length = 10
-            heading_end_x = ((np.cos(np.deg2rad(int_hdg)) * heading_length)/max_distance)*self.window_width
-            heading_end_y = ((np.sin(np.deg2rad(int_hdg)) * heading_length)/max_distance)*self.window_width
-
-            pygame.draw.line(canvas,
-                color,
-                (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-                width = 1
-            )
-
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (x_pos,y_pos),
-                radius = (INTRUSION_DISTANCE*NM2KM/max_distance)*self.window_width,
-                width = 2
-            )
-
-            # import code
-            # code.interact(local=locals())
         
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()

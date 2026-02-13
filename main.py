@@ -5,6 +5,7 @@ Selecting different environments is done through setting the 'env_name' variable
 TODO:
 * add rgb_array rendering for the different environments to allow saving videos
 """
+import random
 import argparse
 import gymnasium as gym
 from stable_baselines3 import PPO, SAC, TD3, DDPG
@@ -19,53 +20,55 @@ from bluesky_gym.utils import logger
 
 bluesky_gym.register_envs()
 
-# env_name = 'DescentEnvXYZ-v0'
+env_name = 'DescentEnvCR3D-v0'
 algorithm = SAC
 
 # TRAIN = True
 EVAL_EPISODES = 10
 
+random.seed(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("env_name", type = str)
+    # parser.add_argument("env_name", type = str)
     parser.add_argument("--train", action="store_true")
     parser.add_argument("--model_path", type=str)
 
     args = parser.parse_args()
 
-    env_name = args.env_name
-
-    # Initialize logger
-    log_dir = f'./logs/{env_name}/'
-    file_name = f'{env_name}_{str(algorithm.__name__)}.csv'
-    csv_logger_callback = logger.CSVLoggerCallback(log_dir, file_name)
-
-    env = gym.make(env_name, render_mode=None)
-
-    # check_env(env)
-
-    obs, info = env.reset()
-    # model = algorithm("MultiInputPolicy", env, verbose=1,learning_rate=3e-4)
-    if args.model_path:
-        model = algorithm.load(args.model_path, env=env)
-        # Save backup if loading from existing
-        if args.train:
-            model.save(f"{args.model_path}_backup")
-    else:
-        model = algorithm("MultiInputPolicy", env, verbose=1,learning_rate=3e-4)
+    # env_name = args.env_name
+    env_name = 'DescentEnvCR3D-v0'
 
     if args.train:
+        # Initialize logger
+        log_dir = f'./logs/{env_name}/'
+        file_name = f'{env_name}_{str(algorithm.__name__)}.csv'
+        csv_logger_callback = logger.CSVLoggerCallback(log_dir, file_name)
+
+        # Pass the directory to enable random scenario selection per episode
+        env = gym.make(env_name, render_mode=None, scenario_path="scenarios_kord")
+        # check_env(env)
+
+        obs, info = env.reset()
+        if args.model_path:
+            model = algorithm.load(args.model_path, env=env)
+            # Save backup if loading from existing
+            if args.train:
+                model.save(f"{args.model_path}_backup")
+        else:
+            model = algorithm("MultiInputPolicy", env, verbose=1,learning_rate=3e-4)
+    
         ts = 5000
         print(f"Training for {ts} timesteps")
         model.learn(total_timesteps=ts, callback=csv_logger_callback)
         model.save(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}")
         del model
-    env.close()
+        env.close()
     
     # Test the trained model
+
+    env = gym.make(env_name, render_mode="human", scenario_path = "scenarios_kord/scenario_001.scn")
     model = algorithm.load(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}", env=env)
-    env = gym.make(env_name, render_mode="human")
     for i in range(EVAL_EPISODES):
 
         done = truncated = False
