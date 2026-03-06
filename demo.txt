@@ -1,0 +1,11 @@
+python main.py --eval --model_path models\DescentEnvCR3D-v0\DescentEnvCR3D-v0_SAC.zip --env DescentEnvCR3D-v0
+
+python main.py --eval --model_path models\MergeEnv-v0_SAC_1024_1024 --env MergeEnv-v0
+
+python visualize_bluesky.py --env merge
+
+
+
+python main.py --eval --env MergeEnvScenario-Pygame-v0 --model_path models/MergeEnv-Bluesky-v0/MergeEnv-Bluesky-v0_SAC
+
+python main.py --eval --env MergeEnv-Bluesky-v0 --eval_episodes 1 --eval_scenario scenarios_kord_merge_standard/scenario_001.scn

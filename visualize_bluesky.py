@@ -7,11 +7,15 @@ This script:
   3. Launches the BlueSky QtGL GUI as a client subprocess
 
 Usage:
+  # Descent environment (default)
   python visualize_bluesky.py
-  python visualize_bluesky.py --model_path models/DescentEnvCR3D-v0/DescentEnvCR3D-v0_SAC
-  python visualize_bluesky.py --scenario_path scenarios_kord/scenario_001.scn --episodes 5
+  python visualize_bluesky.py --env descent --model_path models/DescentEnvCR3D-v0/DescentEnvCR3D-v0_SAC
 
-The RL agent aircraft (KL001) appears in green on the BlueSky radar display.
+  # Merge environment
+  python visualize_bluesky.py --env merge
+  python visualize_bluesky.py --env merge --model_path models/MergeEnv-v0/MergeEnv-v0_SAC --scenario_path scenarios_kord_merge_standard/
+
+The RL agent aircraft (KL001) appears in red on the BlueSky radar display.
 Intruder aircraft appear in their default color.
 """
 import argparse
@@ -82,56 +86,119 @@ import bluesky_gym
 bluesky_gym.register_envs()
 
 
+# ── Environment configs ──────────────────────────────────────────────────
+ENV_CONFIGS = {
+    "descent": {
+        "gym_id":        "DescentEnvCR3D-Bluesky-v0",
+        "model_path":    "models/DescentEnvCR3D-v0/DescentEnvCR3D-v0_SAC",
+        "scenario_path": "scenarios_kord/scenario_001.scn",
+        "pan_lat":       None,
+        "pan_lon":       None,
+        "zoom":          0.4,
+    },
+    "merge": {
+        "gym_id":        "MergeEnv-Bluesky-v0",
+        "model_path":    "models/MergeEnv-Bluesky-v0/MergeEnv-Bluesky-v0_SAC",
+        "scenario_path": "scenarios_kord_merge_standard/",
+        "pan_lat":       None,
+        "pan_lon":       None,
+        "zoom":          0.15,
+    },
+}
+
+
+def _print_episode_result(env_type, i, n_episodes, total_reward, steps, info):
+    base = (f"  Episode {i + 1}/{n_episodes}: "
+            f"reward = {total_reward:.2f}, steps = {steps}, "
+            f"intrusions = {info.get('total_intrusions', 'N/A')}")
+    if env_type == "descent":
+        alt = info.get('final_altitude', None)
+        alt_str = f"{alt:.0f} m" if alt is not None else "N/A"
+        print(base + f", final_alt = {alt_str}")
+    else:
+        faf = info.get('faf_reach', 'N/A')
+        drift = info.get('average_drift', None)
+        drift_str = f"{drift:.3f} rad" if drift is not None else "N/A"
+        print(base + f", faf_reach = {faf}, avg_drift = {drift_str}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Visualize a trained RL agent in the BlueSky GUI"
     )
     parser.add_argument(
-        "--model_path", type=str,
-        default="models/DescentEnvCR3D-v0/DescentEnvCR3D-v0_SAC",
-        help="Path to trained SB3 model (.zip)"
+        "--env", type=str, default="descent", choices=["descent", "merge"],
+        help="Environment to visualize: 'descent' or 'merge' (default: descent)"
     )
     parser.add_argument(
-        "--scenario_path", type=str,
-        default="scenarios_kord/scenario_001.scn",
-        help="Scenario file or directory"
+        "--model_path", type=str, default=None,
+        help="Path to trained SB3 model (.zip). Defaults to the standard path for the chosen env."
+    )
+    parser.add_argument(
+        "--scenario_path", type=str, default=None,
+        help="Scenario file or directory. Defaults to the standard path for the chosen env."
     )
     parser.add_argument(
         "--episodes", type=int, default=3,
         help="Number of episodes to run"
     )
+    parser.add_argument(
+        "--pan_lat", type=float, default=None,
+        help="Latitude to pan the GUI to on startup (overrides env default)"
+    )
+    parser.add_argument(
+        "--pan_lon", type=float, default=None,
+        help="Longitude to pan the GUI to on startup (overrides env default)"
+    )
+    parser.add_argument(
+        "--zoom", type=float, default=None,
+        help="Zoom level for the GUI (overrides env default)"
+    )
     args = parser.parse_args()
+
+    cfg = ENV_CONFIGS[args.env]
+
+    # Override defaults with any explicitly provided CLI arguments
+    model_path    = args.model_path    or cfg["model_path"]
+    scenario_path = args.scenario_path or cfg["scenario_path"]
+    pan_lat       = args.pan_lat       if args.pan_lat is not None else cfg["pan_lat"]
+    pan_lon       = args.pan_lon       if args.pan_lon is not None else cfg["pan_lon"]
+    zoom          = args.zoom          if args.zoom    is not None else cfg["zoom"]
+
+    # Optional manual GUI pan/zoom (env also pans automatically on reset)
+    if pan_lat is not None and pan_lon is not None:
+        bs.stack.stack(f"PAN {pan_lat},{pan_lon}")
+        bs.stack.stack(f"ZOOM {zoom}")
 
     # Create the BlueSky-GUI variant of the environment
     env = gym.make(
-        "DescentEnvCR3D-Bluesky-v0",
+        cfg["gym_id"],
         render_mode="bluesky",
-        scenario_path=args.scenario_path,
+        scenario_path=scenario_path,
     )
 
     # Load the trained model
-    model = SAC.load(args.model_path, env=env)
+    model = SAC.load(model_path, env=env)
 
-    print(f"Running {args.episodes} episodes with model: {args.model_path}")
-    print(f"Scenario: {args.scenario_path}")
+    print(f"Environment  : {cfg['gym_id']}")
+    print(f"Model        : {model_path}")
+    print(f"Scenario     : {scenario_path}")
+    print(f"Episodes     : {args.episodes}")
     print("Watch the BlueSky GUI — the agent aircraft (KL001) is red.\n")
 
     for i in range(args.episodes):
         obs, info = env.reset()
         done = truncated = False
-        total_reward = 0
+        total_reward = 0.0
         steps = 0
 
         while not (done or truncated):
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, info = env.step(action[()])
+            obs, reward, done, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
 
-        print(f"  Episode {i + 1}/{args.episodes}: "
-              f"reward = {total_reward:.2f}, steps = {steps}, "
-              f"intrusions = {info.get('total_intrusions', 'N/A')}, "
-              f"final_alt = {info.get('final_altitude', 'N/A'):.0f} m")
+        _print_episode_result(args.env, i, args.episodes, total_reward, steps, info)
 
         # Brief pause between episodes so the GUI isn't jarring
         time.sleep(1.0)

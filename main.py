@@ -27,8 +27,12 @@ ALGORITHMS = {
     "DDPG": DDPG,
 }
 
-SCEN_ENVS = ["DescentEnvCR3D-v0"]
+SCEN_ENVS = ["DescentEnvCR3D-v0", "MergeEnvScenario-Pygame-v0", "MergeEnv-Bluesky-v0"]
 
+# Bluesky GUI envs only accept render_mode=None or "bluesky", not "human"
+BLUESKY_ENVS = ["MergeEnv-Bluesky-v0", "DescentEnvCR3D-Bluesky-v0"]
+
+# policy_kwargs=dict(net_arch=[1024,1024])
 
 def train(env_name, algorithm, scenario_path, timesteps, lr, model_path=None, checkpoint_freq=10000):
     log_dir = f"./logs/{env_name}/"
@@ -52,9 +56,9 @@ def train(env_name, algorithm, scenario_path, timesteps, lr, model_path=None, ch
     env.reset()
 
     if model_path:
-        model = algorithm.load(model_path, env=env)
+        model = algorithm.load(model_path, env=env, learning_rate=lr)
         model.save(f"{model_path}_backup")
-        print(f"Resumed from {model_path} (backup saved)")
+        print(f"Resumed from {model_path} (backup saved) with lr={lr}")
     else:
         model = algorithm("MultiInputPolicy", env, verbose=1, learning_rate=lr)
 
@@ -101,8 +105,8 @@ if __name__ == "__main__":
     parser.add_argument("--timesteps", type=int, default=30000, help="Total training timesteps")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--model_path", type=str, default=None, help="Path to model (for resume or eval)")
-    parser.add_argument("--scenario_path", type=str, default="scenarios_kord", help="Scenario file or directory")
-    parser.add_argument("--eval_scenario", type=str, default="scenarios_kord/scenario_001.scn", help="Scenario for evaluation")
+    parser.add_argument("--scenario_path", type=str, default="scenarios_kord_merge_standard", help="Scenario file or directory")
+    parser.add_argument("--eval_scenario", type=str, default="scenarios_kord_merge_standard/scenario_001.scn", help="Scenario for evaluation")
     parser.add_argument("--eval_episodes", type=int, default=10, help="Number of evaluation episodes")
     parser.add_argument("--checkpoint_freq", type=int, default=10000, help="Save checkpoint every N timesteps")
 
